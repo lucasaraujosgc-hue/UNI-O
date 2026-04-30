@@ -17,7 +17,7 @@ import axios from 'axios';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-let DATA_DIR = process.env.DATA_DIR || '/backup';
+let DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'backup');
 try {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 } catch (e) {
@@ -26,7 +26,7 @@ try {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const AI_DATA_DIR = '/app/wp';
+const AI_DATA_DIR = path.join(__dirname, 'wp');
 try {
   if (!fs.existsSync(AI_DATA_DIR)) fs.mkdirSync(AI_DATA_DIR, { recursive: true });
 } catch (e) {
@@ -1003,7 +1003,6 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
       authStrategy: new LocalAuth({ dataPath: authPath }),
       puppeteer: {
         headless: true,
-        executablePath: '/usr/bin/chromium',
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
