@@ -3,7 +3,7 @@ import { createServer as createViteServer } from 'vite';
 import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import sqlite3 from 'sqlite3';
+import pool from './db.js';
 import pkg, { type Client as WAClient } from 'whatsapp-web.js';
 const { Client, LocalAuth, MessageMedia } = pkg;
 import qrcode from 'qrcode';
@@ -38,109 +38,12 @@ if (!fs.existsSync(MEDIA_DIR)) fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 const upload = multer({ dest: MEDIA_DIR });
 
-const db = new sqlite3.Database(path.join(DATA_DIR, 'kanban.db'));
-const aiDb = new sqlite3.Database(path.join(AI_DATA_DIR, 'ai_memory.db'));
+// No need for sqlite paths
+// const db = new sqlite3.Database(path.join(DATA_DIR, 'kanban.db'));
+// const aiDb = new sqlite3.Database(path.join(AI_DATA_DIR, 'ai_memory.db'));
 
-// Initialize AI Database
-aiDb.serialize(() => {
-  aiDb.run(`CREATE TABLE IF NOT EXISTS ai_memory (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content TEXT,
-    created_at INTEGER
-  )`);
-  
-  // Try to add new columns if they don't exist
-  aiDb.run(`ALTER TABLE ai_memory ADD COLUMN trigger_at INTEGER`, (err) => { /* ignore */ });
-  aiDb.run(`ALTER TABLE ai_memory ADD COLUMN is_triggered INTEGER DEFAULT 0`, (err) => { /* ignore */ });
-
-  aiDb.run(`CREATE TABLE IF NOT EXISTS scheduled_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phone TEXT,
-    message TEXT,
-    trigger_at INTEGER,
-    is_triggered INTEGER DEFAULT 0,
-    created_at INTEGER
-  )`);
-});
-
-// Initialize Database
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS columns (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    position INTEGER NOT NULL,
-    color TEXT DEFAULT '#e2e8f0'
-  )`);
-
-  // Try to add color column if it doesn't exist (for existing databases)
-  db.run(`ALTER TABLE columns ADD COLUMN color TEXT DEFAULT '#e2e8f0'`, (err) => { /* ignore if exists */ });
-
-  db.run(`CREATE TABLE IF NOT EXISTS chats (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    phone TEXT,
-    column_id TEXT,
-    last_message TEXT,
-    last_message_time INTEGER,
-    unread_count INTEGER DEFAULT 0,
-    profile_pic TEXT,
-    last_message_from_me INTEGER DEFAULT 0
-  )`);
-
-  // Try to add profile_pic column if it doesn't exist
-  db.run(`ALTER TABLE chats ADD COLUMN profile_pic TEXT`, (err) => { /* ignore */ });
-  
-  // Try to add last_message_from_me column if it doesn't exist
-  db.run(`ALTER TABLE chats ADD COLUMN last_message_from_me INTEGER DEFAULT 0`, (err) => { /* ignore */ });
-
-  db.run(`CREATE TABLE IF NOT EXISTS tags (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    color TEXT NOT NULL
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS chat_tags (
-    chat_id TEXT,
-    tag_id TEXT,
-    PRIMARY KEY (chat_id, tag_id)
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS ai_memory (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content TEXT,
-    created_at INTEGER
-  )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    chat_id TEXT NOT NULL,
-    body TEXT,
-    from_me INTEGER,
-    timestamp INTEGER,
-    media_url TEXT,
-    media_type TEXT,
-    media_name TEXT,
-    transcription TEXT
-  )`);
-
-  // Try to add media columns if they don't exist
-  db.run(`ALTER TABLE messages ADD COLUMN media_url TEXT`, (err) => { /* ignore */ });
-  db.run(`ALTER TABLE messages ADD COLUMN media_type TEXT`, (err) => { /* ignore */ });
-  db.run(`ALTER TABLE messages ADD COLUMN media_name TEXT`, (err) => { /* ignore */ });
-  db.run(`ALTER TABLE messages ADD COLUMN transcription TEXT`, (err) => { /* ignore */ });
-
-  // Insert default columns if empty
-  db.get("SELECT COUNT(*) as count FROM columns", (err, row) => {
-    if (row && row.count === 0) {
-      const stmt = db.prepare("INSERT INTO columns (id, name, position) VALUES (?, ?, ?)");
-      stmt.run('col-1', 'Novos', 0);
-      stmt.run('col-2', 'Em Atendimento', 1);
-      stmt.run('col-3', 'Aguardando Cliente', 2);
-      stmt.run('col-4', 'Finalizados', 3);
-      stmt.finalize();
-    }
-  });
-});
+// Connection check
+pool.query('SELECT NOW()').catch(err => console.error('Postgres connection error:', err));
 
 async function startServer() {
   const app = express();
@@ -193,44 +96,36 @@ setInterval(() => {
   const now = Date.now();
   
   // Check reminders
-  aiDb.all("SELECT * FROM ai_memory WHERE trigger_at IS NOT NULL AND trigger_at <= ? AND is_triggered = 0", [now], (err, rows) => {
-    if (err) {
-      console.error('Error checking reminders:', err);
-      return;
-    }
-    
+  pool.query("SELECT * FROM ai_memory WHERE trigger_at IS NOT NULL AND trigger_at <= $1 AND is_triggered = 0", [now]).then(res => {
+    const rows = res.rows;
     if (rows && rows.length > 0) {
       rows.forEach(async (row) => {
         try {
           await waClient.sendMessage('557591167094@c.us', `⏰ *LEMBRETE*\n\n${row.content}`);
-          aiDb.run("UPDATE ai_memory SET is_triggered = 1 WHERE id = ?", [row.id]);
+          await pool.query("UPDATE ai_memory SET is_triggered = 1 WHERE id = $1", [row.id]);
         } catch (e) {
           console.error('Error sending reminder:', e);
         }
       });
     }
-  });
+  }).catch(err => console.error('Error checking reminders:', err));
 
   // Check scheduled messages
-  aiDb.all("SELECT * FROM scheduled_messages WHERE trigger_at <= ? AND is_triggered = 0", [now], (err, rows) => {
-    if (err) {
-      console.error('Error checking scheduled messages:', err);
-      return;
-    }
-    
+  pool.query("SELECT * FROM scheduled_messages WHERE trigger_at <= $1 AND is_triggered = 0", [now]).then(res => {
+    const rows = res.rows;
     if (rows && rows.length > 0) {
       rows.forEach(async (row) => {
         try {
           const chatId = `${row.phone}@c.us`;
           await waClient.sendMessage(chatId, row.message);
-          aiDb.run("UPDATE scheduled_messages SET is_triggered = 1 WHERE id = ?", [row.id]);
+          await pool.query("UPDATE scheduled_messages SET is_triggered = 1 WHERE id = $1", [row.id]);
           await waClient.sendMessage('557591167094@c.us', `✅ *MENSAGEM AGENDADA ENVIADA*\n\nPara: ${row.phone}\nMensagem: ${row.message}`);
         } catch (e) {
           console.error('Error sending scheduled message:', e);
         }
       });
     }
-  });
+  }).catch(err => console.error('Error checking scheduled messages:', err));
 }, 60000); // Check every minute
 
 // --- API Routes ---
@@ -243,39 +138,27 @@ setInterval(() => {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       
-      const chats = await new Promise((resolve, reject) => {
-        db.all(`
-          SELECT c.id, c.name, c.phone, c.last_message, c.last_message_time, c.unread_count, col.name as column_name, GROUP_CONCAT(t.name) as tags
+      const chatsRes = await pool.query(`
+          SELECT c.id, c.name, c.phone, c.last_message, c.last_message_time, c.unread_count, col.name as column_name, STRING_AGG(t.name, ',') as tags
           FROM chats c
           LEFT JOIN columns col ON c.column_id = col.id
           LEFT JOIN chat_tags ct ON c.id = ct.chat_id
           LEFT JOIN tags t ON ct.tag_id = t.id
-          GROUP BY c.id
-        `, (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows);
-        });
-      });
+          GROUP BY c.id, col.name
+      `);
+      const chats = chatsRes.rows;
 
-      const tags = await new Promise((resolve, reject) => {
-        db.all("SELECT * FROM tags", (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows);
-        });
-      });
+      const tagsRes = await pool.query("SELECT * FROM tags");
+      const tags = tagsRes.rows;
 
-      const recentMessages = await new Promise((resolve, reject) => {
-        db.all(`
+      const recentMessagesRes = await pool.query(`
           SELECT m.body, m.from_me, m.timestamp, c.name as chat_name
           FROM messages m
           JOIN chats c ON m.chat_id = c.id
           ORDER BY m.timestamp DESC
           LIMIT 100
-        `, (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows);
-        });
-      });
+      `);
+      const recentMessages = recentMessagesRes.rows;
 
       const systemInstruction = `Você deve funcionar como um “copiloto” do dashboard.
 Data e hora atual: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
@@ -391,9 +274,7 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
               }
               
               if (triggerAt && phone && msgText) {
-                await new Promise((resolve) => {
-                  aiDb.run("INSERT INTO scheduled_messages (phone, message, trigger_at, is_triggered, created_at) VALUES (?, ?, ?, ?, ?)", [phone, msgText, triggerAt, 0, Date.now()], resolve);
-                });
+                await pool.query("INSERT INTO scheduled_messages (phone, message, trigger_at, is_triggered, created_at) VALUES ($1, $2, $3, $4, $5)", [phone, msgText, triggerAt, 0, Date.now()]);
                 replyText = `✅ Mensagem agendada para ${new Date(triggerAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}:\nPara: ${phone}\n"${msgText}"`;
               } else {
                 replyText = `❌ Erro ao agendar mensagem. Verifique se o telefone, mensagem e data/hora estão corretos.`;
@@ -402,27 +283,21 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
               const tagName = params.name || params.nome;
               const tagId = `tag-${Date.now()}`;
               const color = '#' + Math.floor(Math.random()*16777215).toString(16);
-              await new Promise((resolve) => {
-                db.run("INSERT INTO tags (id, name, color) VALUES (?, ?, ?)", [tagId, tagName, color], resolve);
-              });
+              await pool.query("INSERT INTO tags (id, name, color) VALUES ($1, $2, $3)", [tagId, tagName, color]);
               io.emit('tags_updated');
               replyText = `✅ Tag "${tagName}" criada com sucesso.`;
             } else if (command === 'ADD_TAG') {
               const phone = params.phone || params.contact_phone;
               const tagName = params.tag_name || params.name;
               // Find chat by phone
-              const chat = await new Promise((resolve) => {
-                db.get("SELECT id FROM chats WHERE phone = ?", [phone], (err, row) => resolve(row));
-              });
+              const chatRes = await pool.query("SELECT id FROM chats WHERE phone = $1", [phone]);
+              const chat = chatRes.rows[0];
               if (chat) {
                 // Find tag by name
-                const tag = await new Promise((resolve) => {
-                  db.get("SELECT id FROM tags WHERE name LIKE ?", [`%${tagName}%`], (err, row) => resolve(row));
-                });
+                const tagRes = await pool.query("SELECT id FROM tags WHERE name ILIKE $1", [`%${tagName}%`]);
+                const tag = tagRes.rows[0];
                 if (tag) {
-                  await new Promise((resolve) => {
-                    db.run("INSERT OR IGNORE INTO chat_tags (chat_id, tag_id) VALUES (?, ?)", [chat.id, tag.id], resolve);
-                  });
+                  await pool.query("INSERT INTO chat_tags (chat_id, tag_id) ON CONFLICT DO NOTHING VALUES ($1, $2)", [chat.id, tag.id]);
                   io.emit('chat_updated', { id: chat.id });
                   replyText = `✅ Tag "${tagName}" adicionada ao contato.`;
                 } else {
@@ -442,9 +317,7 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
                 }
               }
               
-              await new Promise((resolve) => {
-                aiDb.run("INSERT INTO ai_memory (content, created_at, trigger_at, is_triggered) VALUES (?, ?, ?, ?)", [content, Date.now(), triggerAt, 0], resolve);
-              });
+              await pool.query("INSERT INTO ai_memory (content, created_at, trigger_at, is_triggered) VALUES ($1, $2, $3, $4)", [content, Date.now(), triggerAt, 0]);
               
               if (triggerAt) {
                 replyText = `✅ Lembrete agendado para ${new Date(triggerAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}:\n"${content}"`;
@@ -469,186 +342,213 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
     }
   });
 
-  app.get('/api/columns', (req, res) => {
-    db.all("SELECT * FROM columns ORDER BY position ASC", (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
-    });
+  app.get('/api/columns', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM columns ORDER BY position ASC");
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.post('/api/columns', (req, res) => {
+  app.post('/api/columns', async (req, res) => {
     const { id, name, position, color } = req.body;
-    db.run("INSERT INTO columns (id, name, position, color) VALUES (?, ?, ?, ?)", [id, name, position, color || '#e2e8f0'], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+    try {
+      await pool.query("INSERT INTO columns (id, name, position, color) VALUES ($1, $2, $3, $4)", [id, name, position, color || '#e2e8f0']);
       io.emit('columns_updated');
       res.json({ success: true });
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.put('/api/columns/:id', (req, res) => {
+  app.put('/api/columns/:id', async (req, res) => {
     const { name, position, color } = req.body;
-    db.run("UPDATE columns SET name = ?, position = ?, color = ? WHERE id = ?", [name, position, color || '#e2e8f0', req.params.id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+    try {
+      await pool.query("UPDATE columns SET name = $1, position = $2, color = $3 WHERE id = $4", [name, position, color || '#e2e8f0', req.params.id]);
       io.emit('columns_updated');
       res.json({ success: true });
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.delete('/api/columns/:id', (req, res) => {
+  app.delete('/api/columns/:id', async (req, res) => {
     const colId = req.params.id;
-    // Find another column to move chats to
-    db.get("SELECT id FROM columns WHERE id != ? ORDER BY position ASC LIMIT 1", [colId], (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
-      
-      const targetColId = row ? row.id : null;
+    try {
+      // Find another column to move chats to
+      const targetColRes = await pool.query("SELECT id FROM columns WHERE id != $1 ORDER BY position ASC LIMIT 1", [colId]);
+      const targetColId = targetColRes.rows[0]?.id;
       
       if (targetColId) {
-        db.run("UPDATE chats SET column_id = ? WHERE column_id = ?", [targetColId, colId], (err) => {
-          if (err) return res.status(500).json({ error: err.message });
-          
-          db.run("DELETE FROM columns WHERE id = ?", [colId], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            io.emit('columns_updated');
-            io.emit('chat_updated'); // Trigger chat refresh
-            res.json({ success: true });
-          });
-        });
+        await pool.query("UPDATE chats SET column_id = $1 WHERE column_id = $2", [targetColId, colId]);
+        await pool.query("DELETE FROM columns WHERE id = $1", [colId]);
+        io.emit('columns_updated');
+        io.emit('chat_updated'); // Trigger chat refresh
+        res.json({ success: true });
       } else {
-        // Can't delete the last column
         res.status(400).json({ error: 'Cannot delete the last column' });
       }
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.get('/api/chats', (req, res) => {
-    db.all(`
-      SELECT c.*, GROUP_CONCAT(t.id) as tag_ids
-      FROM chats c
-      LEFT JOIN chat_tags ct ON c.id = ct.chat_id
-      LEFT JOIN tags t ON ct.tag_id = t.id
-      GROUP BY c.id
-      ORDER BY c.last_message_time DESC
-    `, (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      const formattedRows = rows.map((r) => ({
+  app.get('/api/chats', async (req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT c.*, STRING_AGG(t.id, ',') as tag_ids
+        FROM chats c
+        LEFT JOIN chat_tags ct ON c.id = ct.chat_id
+        LEFT JOIN tags t ON ct.tag_id = t.id
+        GROUP BY c.id
+        ORDER BY c.last_message_time DESC NULLS LAST
+      `);
+      const formattedRows = result.rows.map((r) => ({
         ...r,
         tag_ids: r.tag_ids ? r.tag_ids.split(',') : []
       }));
       res.json(formattedRows);
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.put('/api/chats/:id/column', (req, res) => {
+  app.put('/api/chats/:id/column', async (req, res) => {
     const { column_id } = req.body;
-    db.run("UPDATE chats SET column_id = ? WHERE id = ?", [column_id, req.params.id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+    try {
+      await pool.query("UPDATE chats SET column_id = $1 WHERE id = $2", [column_id, req.params.id]);
       io.emit('chat_updated', { id: req.params.id, column_id });
       res.json({ success: true });
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.put('/api/chats/:id/name', (req, res) => {
+  app.put('/api/chats/:id/name', async (req, res) => {
     const { name } = req.body;
-    db.run("UPDATE chats SET name = ? WHERE id = ?", [name, req.params.id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+    try {
+      await pool.query("UPDATE chats SET name = $1 WHERE id = $2", [name, req.params.id]);
       io.emit('chat_updated', { id: req.params.id, name });
       res.json({ success: true });
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.put('/api/chats/:id/read', (req, res) => {
-    db.run("UPDATE chats SET unread_count = 0 WHERE id = ?", [req.params.id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+  app.put('/api/chats/:id/read', async (req, res) => {
+    try {
+      await pool.query("UPDATE chats SET unread_count = 0 WHERE id = $1", [req.params.id]);
       io.emit('chat_updated', { id: req.params.id, unread_count: 0 });
       res.json({ success: true });
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.get('/api/tags', (req, res) => {
-    db.all("SELECT * FROM tags", (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
-    });
+  app.get('/api/tags', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM tags");
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.get('/api/ai_memory', (req, res) => {
-    aiDb.all("SELECT * FROM ai_memory ORDER BY created_at DESC", (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
-    });
+  app.get('/api/ai_memory', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM ai_memory ORDER BY created_at DESC");
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.post('/api/ai_memory', (req, res) => {
+  app.post('/api/ai_memory', async (req, res) => {
     const { content } = req.body;
     if (!content) return res.status(400).json({ error: 'Content is required' });
     
-    aiDb.run("INSERT INTO ai_memory (content, created_at) VALUES (?, ?)", [content, Date.now()], function(err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ id: this.lastID, content, created_at: Date.now() });
-    });
+    try {
+      const result = await pool.query("INSERT INTO ai_memory (content, created_at) VALUES ($1, $2) RETURNING id", [content, Date.now()]);
+      res.json({ id: result.rows[0].id, content, created_at: Date.now() });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.delete('/api/ai_memory/:id', (req, res) => {
-    aiDb.run("DELETE FROM ai_memory WHERE id = ?", [req.params.id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+  app.delete('/api/ai_memory/:id', async (req, res) => {
+    try {
+      await pool.query("DELETE FROM ai_memory WHERE id = $1", [req.params.id]);
       res.json({ success: true });
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.post('/api/tags', (req, res) => {
+  app.post('/api/tags', async (req, res) => {
     const { id, name, color } = req.body;
-    db.run("INSERT INTO tags (id, name, color) VALUES (?, ?, ?)", [id, name, color], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+    try {
+      await pool.query("INSERT INTO tags (id, name, color) VALUES ($1, $2, $3)", [id, name, color]);
       io.emit('tags_updated');
       res.json({ success: true });
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.put('/api/tags/:id', (req, res) => {
+  app.put('/api/tags/:id', async (req, res) => {
     const { name, color } = req.body;
-    db.run("UPDATE tags SET name = ?, color = ? WHERE id = ?", [name, color, req.params.id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+    try {
+      await pool.query("UPDATE tags SET name = $1, color = $2 WHERE id = $3", [name, color, req.params.id]);
       io.emit('tags_updated');
       res.json({ success: true });
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.delete('/api/tags/:id', (req, res) => {
-    db.serialize(() => {
-      db.run("DELETE FROM chat_tags WHERE tag_id = ?", [req.params.id]);
-      db.run("DELETE FROM tags WHERE id = ?", [req.params.id], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        io.emit('tags_updated');
-        res.json({ success: true });
-      });
-    });
+  app.delete('/api/tags/:id', async (req, res) => {
+    try {
+      await pool.query("DELETE FROM chat_tags WHERE tag_id = $1", [req.params.id]);
+      await pool.query("DELETE FROM tags WHERE id = $1", [req.params.id]);
+      io.emit('tags_updated');
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.post('/api/chats/:id/tags', (req, res) => {
+  app.post('/api/chats/:id/tags', async (req, res) => {
     const { tag_id } = req.body;
-    db.run("INSERT INTO chat_tags (chat_id, tag_id) VALUES (?, ?)", [req.params.id, tag_id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+    try {
+      await pool.query("INSERT INTO chat_tags (chat_id, tag_id) ON CONFLICT DO NOTHING VALUES ($1, $2)", [req.params.id, tag_id]);
       io.emit('chat_tags_updated', { chat_id: req.params.id });
       res.json({ success: true });
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.delete('/api/chats/:id/tags/:tag_id', (req, res) => {
-    db.run("DELETE FROM chat_tags WHERE chat_id = ? AND tag_id = ?", [req.params.id, req.params.tag_id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+  app.delete('/api/chats/:id/tags/:tag_id', async (req, res) => {
+    try {
+      await pool.query("DELETE FROM chat_tags WHERE chat_id = $1 AND tag_id = $2", [req.params.id, req.params.tag_id]);
       io.emit('chat_tags_updated', { chat_id: req.params.id });
       res.json({ success: true });
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.get('/api/chats/:id/messages', (req, res) => {
-    db.all("SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp ASC", [req.params.id], (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
-    });
+  app.get('/api/chats/:id/messages', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM messages WHERE chat_id = $1 ORDER BY timestamp ASC", [req.params.id]);
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.get('/api/system/storage', (req, res) => {
+  app.get('/api/system/storage', async (req, res) => {
     try {
       let totalSize = 0;
       if (fs.existsSync(MEDIA_DIR)) {
@@ -664,17 +564,17 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
     }
   });
 
-  app.get('/api/media', (req, res) => {
-    db.all(`
-      SELECT m.id, m.chat_id, m.media_url, m.media_type, m.media_name, m.timestamp, m.from_me, c.name as chat_name, c.phone as chat_phone
-      FROM messages m
-      JOIN chats c ON m.chat_id = c.id
-      WHERE m.media_url IS NOT NULL
-      ORDER BY m.timestamp DESC
-    `, (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+  app.get('/api/media', async (req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT m.id, m.chat_id, m.media_url, m.media_type, m.media_name, m.timestamp, m.from_me, c.name as chat_name, c.phone as chat_phone
+        FROM messages m
+        JOIN chats c ON m.chat_id = c.id
+        WHERE m.media_url IS NOT NULL
+        ORDER BY m.timestamp DESC
+      `);
       
-      const mediaFiles = rows.map(row => {
+      const mediaFiles = result.rows.map(row => {
         let size = 0;
         if (row.media_url) {
           try {
@@ -693,7 +593,9 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
       });
       
       res.json(mediaFiles);
-    });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.post('/api/chats/:id/messages', upload.single('media'), async (req, res) => {
@@ -718,7 +620,7 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
           media.filename = file.originalname;
           sentMsg = await waClient.sendMessage(chatId, media, { caption: body });
           
-          mediaUrl = \`/media/\${file.filename}\${ext}\`;
+          mediaUrl = `/media/${file.filename}${ext}`;
           mediaType = file.mimetype;
           mediaName = file.originalname;
         } else {
@@ -728,10 +630,10 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
         const msgId = sentMsg.id.id;
         const timestamp = Date.now();
         
-        db.run("INSERT INTO messages (id, chat_id, body, from_me, timestamp, media_url, media_type, media_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        await pool.query("INSERT INTO messages (id, chat_id, body, from_me, timestamp, media_url, media_type, media_name) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
           [msgId, chatId, body || '', 1, timestamp, mediaUrl, mediaType, mediaName]);
           
-        db.run("UPDATE chats SET last_message = ?, last_message_time = ?, last_message_from_me = 1 WHERE id = ?",
+        await pool.query("UPDATE chats SET last_message = $1, last_message_time = $2, last_message_from_me = 1 WHERE id = $3",
           [body || 'Media', timestamp, chatId]);
           
         io.emit('new_message', {
@@ -754,10 +656,11 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
     }
   });
 
-  app.delete('/api/media/:id', (req, res) => {
+  app.delete('/api/media/:id', async (req, res) => {
     const mediaId = req.params.id;
-    db.get("SELECT media_url FROM messages WHERE id = ?", [mediaId], (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
+    try {
+      const result = await pool.query("SELECT media_url FROM messages WHERE id = $1", [mediaId]);
+      const row = result.rows[0];
       if (!row || !row.media_url) return res.status(404).json({ error: 'Media not found' });
       
       const filename = row.media_url.replace('/media/', '');
@@ -767,28 +670,222 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
         fs.unlinkSync(filePath);
       }
       
-      db.run("UPDATE messages SET media_url = NULL, media_type = NULL, media_name = NULL WHERE id = ?", [mediaId], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
-      });
-    });
+      await pool.query("UPDATE messages SET media_url = NULL, media_type = NULL, media_name = NULL WHERE id = $1", [mediaId]);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
-  app.delete('/api/chats/:id', (req, res) => {
+  app.delete('/api/chats/:id', async (req, res) => {
     const chatId = req.params.id;
-    db.run("DELETE FROM messages WHERE chat_id = ?", [chatId], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
-      
-      db.run("DELETE FROM chat_tags WHERE chat_id = ?", [chatId], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        
-        db.run("DELETE FROM chats WHERE id = ?", [chatId], (err) => {
-          if (err) return res.status(500).json({ error: err.message });
-          io.emit('chat_deleted', { id: chatId });
-          res.json({ success: true });
-        });
-      });
-    });
+    try {
+      await pool.query("DELETE FROM messages WHERE chat_id = $1", [chatId]);
+      await pool.query("DELETE FROM chat_tags WHERE chat_id = $1", [chatId]);
+      await pool.query("DELETE FROM chats WHERE id = $1", [chatId]);
+      io.emit('chat_deleted', { id: chatId });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- Companies API ---
+  app.get('/api/companies', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM companies ORDER BY name ASC");
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/companies', async (req, res) => {
+    const { id, name, docNumber, type, email, whatsapp } = req.body;
+    try {
+      if (id) {
+        await pool.query(
+          "UPDATE companies SET name = $1, doc_number = $2, type = $3, email = $4, whatsapp = $5 WHERE id = $6",
+          [name, docNumber, type, email, whatsapp, id]
+        );
+        res.json({ success: true, id });
+      } else {
+        const result = await pool.query(
+          "INSERT INTO companies (name, doc_number, type, email, whatsapp) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+          [name, docNumber, type, email, whatsapp]
+        );
+        res.json({ success: true, id: result.rows[0].id });
+      }
+    } catch (err) {
+      console.error('Error saving company:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/companies/:id', async (req, res) => {
+    try {
+      await pool.query("DELETE FROM companies WHERE id = $1", [req.params.id]);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- Tasks (Kanban) API ---
+  app.get('/api/tasks', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM tasks ORDER BY created_at DESC");
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/tasks', async (req, res) => {
+    const { id, title, description, status, priority, due_date } = req.body;
+    try {
+      if (id) {
+        await pool.query(
+          "UPDATE tasks SET title = $1, description = $2, status = $3, priority = $4, due_date = $5 WHERE id = $6",
+          [title, description, status, priority, due_date, id]
+        );
+        res.json({ success: true, id });
+      } else {
+        const result = await pool.query(
+          "INSERT INTO tasks (title, description, status, priority, due_date, created_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+          [title, description, status || 'todo', priority || 'medium', due_date, Date.now()]
+        );
+        res.json({ success: true, id: result.rows[0].id });
+      }
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/tasks/:id', async (req, res) => {
+    try {
+      await pool.query("DELETE FROM tasks WHERE id = $1", [req.params.id]);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- Documents API ---
+  app.get('/api/documents/status', async (req, res) => {
+    const { competence } = req.query;
+    try {
+      const result = await pool.query("SELECT * FROM document_status WHERE competence = $1", [competence]);
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/documents/status', async (req, res) => {
+    const { companyId, category, competence, status } = req.body;
+    try {
+      await pool.query(`
+        INSERT INTO document_status (company_id, category, competence, status)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (company_id, category, competence) DO UPDATE SET status = $4
+      `, [companyId, category, competence, status]);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- Settings API ---
+  app.get('/api/settings', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM user_settings LIMIT 1");
+      res.json(result.rows[0] || {});
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/settings', async (req, res) => {
+    const settings = req.body;
+    try {
+      // Check if settings exist
+      const check = await pool.query("SELECT id FROM user_settings LIMIT 1");
+      if (check.rows.length > 0) {
+        await pool.query(
+          "UPDATE user_settings SET company_name = $1, email_config = $2, whatsapp_config = $3, updated_at = $4 WHERE id = $5",
+          [settings.company_name, JSON.stringify(settings.email_config), JSON.stringify(settings.whatsapp_config), Date.now(), check.rows[0].id]
+        );
+      } else {
+        await pool.query(
+          "INSERT INTO user_settings (company_name, email_config, whatsapp_config, created_at) VALUES ($1, $2, $3, $4)",
+          [settings.company_name, JSON.stringify(settings.email_config), JSON.stringify(settings.whatsapp_config), Date.now()]
+        );
+      }
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- Scheduled Messages API ---
+  app.get('/api/scheduled', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM scheduled_messages ORDER BY trigger_at ASC");
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/scheduled', async (req, res) => {
+    const { phone, message, trigger_at } = req.body;
+    try {
+      const result = await pool.query(
+        "INSERT INTO scheduled_messages (phone, message, trigger_at, created_at) VALUES ($1, $2, $3, $4) RETURNING id",
+        [phone, message, new Date(trigger_at).getTime(), Date.now()]
+      );
+      res.json({ success: true, id: result.rows[0].id });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/scheduled/:id', async (req, res) => {
+    try {
+      await pool.query("DELETE FROM scheduled_messages WHERE id = $1", [req.params.id]);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- Dashboard Stats ---
+  app.get('/api/recent-sends', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM sent_logs ORDER BY timestamp DESC LIMIT 20");
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- WhatsApp Action Endpoints ---
+  app.post('/api/whatsapp/disconnect', async (req, res) => {
+    if (waClient) {
+      try {
+        await waClient.logout();
+        await waClient.destroy();
+        waClient = null;
+        waStatus = 'disconnected';
+        io.emit('wa_status', { status: waStatus });
+        res.json({ success: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    } else {
+      res.json({ success: true });
+    }
   });
 
   // --- WhatsApp Client Setup ---
@@ -901,22 +998,20 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
         profilePic = await downloadProfilePic(profilePicUrl, chatId);
       }
 
-      db.run(
-        "UPDATE chats SET profile_pic = ?, name = ? WHERE id = ?",
-        [profilePic || null, name, chatId],
-        (err) => {
-          if (err) {
-            console.error(\`Error updating chat info for \${chatId}:\`, err);
-            return;
-          }
+      try {
+        await pool.query(
+          "UPDATE chats SET profile_pic = $1, name = $2 WHERE id = $3",
+          [profilePic || null, name, chatId]
+        );
 
           io.emit('chat_updated', {
             id: chatId,
             name: name,
             profile_pic: profilePic || null
           });
-        }
-      );
+      } catch (err) {
+        console.error(`Error updating chat info for ${chatId}:`, err);
+      }
 
       return profilePic || null;
     } catch (error) {
@@ -949,22 +1044,19 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
       return res.status(400).json({ error: 'WhatsApp not connected' });
     }
 
-    db.all("SELECT id FROM chats", async (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+    const result = await pool.query("SELECT id FROM chats");
+    const rows = result.rows;
+
+    try {
+      for (const row of rows) {
+        await syncChatProfilePic(row.id);
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
-      try {
-        for (const row of rows) {
-          await syncChatProfilePic(row.id);
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-
-        res.json({ success: true, total: rows.length });
-      } catch (error) {
-        res.status(500).json({ error: error.message });
-      }
-    });
+      res.json({ success: true, total: rows.length });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
   });
 
   const initWhatsApp = () => {
@@ -1022,23 +1114,22 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
       io.emit('wa_status', { status: waStatus, qr: waQrCode });
     });
 
-    waClient.on('ready', () => {
+    waClient.on('ready', async () => {
       console.log('WhatsApp Client is ready!');
       waStatus = 'connected';
       waQrCode = '';
       io.emit('wa_status', { status: waStatus });
 
-      db.all("SELECT id FROM chats", async (err, rows) => {
-        if (err) {
-          console.error('Error loading chats for profile pic sync:', err);
-          return;
-        }
-
+      try {
+        const result = await pool.query("SELECT id FROM chats");
+        const rows = result.rows;
         for (const row of rows) {
           await syncChatProfilePic(row.id);
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
-      });
+      } catch (err) {
+        console.error('Error loading chats for profile pic sync:', err);
+      }
     });
 
     waClient.on('authenticated', () => {
@@ -1084,30 +1175,34 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
           const media = await msg.downloadMedia();
           if (media) {
             const ext = media.mimetype.split('/')[1].split(';')[0];
-            const filename = \`\${msg.id.id}.\${ext}\`;
+            const filename = `${msg.id.id}.${ext}`;
             const filepath = path.join(MEDIA_DIR, filename);
             fs.writeFileSync(filepath, Buffer.from(media.data, 'base64'));
             
-            mediaUrl = \`/media/\${filename}\`;
+            mediaUrl = `/media/${filename}`;
             mediaType = media.mimetype;
             mediaName = media.filename || filename;
 
             if (media.mimetype.startsWith('audio/') && process.env.GEMINI_API_KEY) {
               try {
                 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-                const response = await ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
+                const response = await ai.getGenerativeModel({ model: 'gemini-1.5-flash' }).generateContent({
                   contents: [
                     {
-                      inlineData: {
-                        data: media.data,
-                        mimeType: media.mimetype,
-                      },
+                      role: 'user',
+                      parts: [
+                        {
+                          inlineData: {
+                            data: media.data,
+                            mimeType: media.mimetype,
+                          },
+                        },
+                        { text: 'Transcreva este áudio em português. Retorne apenas a transcrição.' }
+                      ],
                     },
-                    'Transcreva este áudio em português. Retorne apenas a transcrição.',
                   ],
                 });
-                transcription = response.text;
+                transcription = response.response.text();
               } catch (err) {
                 console.error('Transcription error:', err);
               }
@@ -1118,7 +1213,7 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
         }
       }
 
-      const displayBody = body || (mediaType ? \`[Media: \${mediaType}]\` : '');
+      const displayBody = body || (mediaType ? `[Media: ${mediaType}]` : '');
 
       let profilePic = null;
       try {
@@ -1134,64 +1229,61 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
         console.log("Erro ao recuperar foto para:", chatId);
       }
 
-      db.get("SELECT id FROM messages WHERE id = ?", [msg.id.id], (err, row) => {
-        if (row) return; // Message already processed
+      const resMsg = await pool.query("SELECT id FROM messages WHERE id = $1", [msg.id.id]);
+      if (resMsg.rows.length > 0) return; // Message already processed
 
-        db.get("SELECT id, profile_pic FROM chats WHERE id = ? OR (phone = ? AND phone IS NOT NULL AND phone != '')", [chatId, phone], (err, chatRow) => {
-          if (!chatRow) {
-            // New chat
-            db.get("SELECT id FROM columns ORDER BY position ASC LIMIT 1", (err, colRow) => {
-              const colId = colRow ? colRow.id : 'col-1';
-              const unreadCount = fromMe ? 0 : 1;
-              db.run("INSERT INTO chats (id, name, phone, column_id, last_message, last_message_time, unread_count, profile_pic, last_message_from_me) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [chatId, name, phone, colId, displayBody, timestamp, unreadCount, profilePic, fromMe], () => {
-                  io.emit('new_chat', { id: chatId, name, phone, column_id: colId, last_message: displayBody, last_message_time: timestamp, unread_count: unreadCount, profile_pic: profilePic, last_message_from_me: fromMe });
-                });
-            });
-          } else {
-            // Update existing
-            const unreadUpdate = fromMe ? "" : ", unread_count = unread_count + 1";
-            const finalProfilePic = profilePic || chatRow.profile_pic;
-            
-            db.serialize(() => {
-              if (chatRow.id !== chatId) {
-                db.run("UPDATE chats SET id = ? WHERE id = ?", [chatId, chatRow.id]);
-                db.run("UPDATE messages SET chat_id = ? WHERE chat_id = ?", [chatId, chatRow.id]);
-                db.run("UPDATE chat_tags SET chat_id = ? WHERE chat_id = ?", [chatId, chatRow.id]);
-                io.emit('chat_deleted', { id: chatRow.id });
-                
-                db.get("SELECT * FROM chats WHERE id = ?", [chatId], (err, updatedChatRow) => {
-                  if (updatedChatRow) {
-                    io.emit('new_chat', updatedChatRow);
-                  }
-                });
-              }
-              
-              db.run(\`UPDATE chats SET last_message = ?, last_message_time = ?, profile_pic = ?, name = ?, last_message_from_me = ?\${unreadUpdate} WHERE id = ?\`,
-                [displayBody, timestamp, finalProfilePic, name, fromMe, chatId], () => {
-                  io.emit('chat_updated', { id: chatId, last_message: displayBody, last_message_time: timestamp, profile_pic: finalProfilePic, name, last_message_from_me: fromMe });
-                });
-            });
+      const resChat = await pool.query("SELECT id, profile_pic FROM chats WHERE id = $1 OR (phone = $2 AND phone IS NOT NULL AND phone != '')", [chatId, phone]);
+      const chatRow = resChat.rows[0];
+
+      if (!chatRow) {
+        // New chat
+        const resCol = await pool.query("SELECT id FROM columns ORDER BY position ASC LIMIT 1");
+        const colId = resCol.rows[0] ? resCol.rows[0].id : 'col-1';
+        const unreadCount = fromMe ? 0 : 1;
+        await pool.query("INSERT INTO chats (id, name, phone, column_id, last_message, last_message_time, unread_count, profile_pic, last_message_from_me) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+          [chatId, name, phone, colId, displayBody, timestamp, unreadCount, profilePic, fromMe]);
+        
+        io.emit('new_chat', { id: chatId, name, phone, column_id: colId, last_message: displayBody, last_message_time: timestamp, unread_count: unreadCount, profile_pic: profilePic, last_message_from_me: fromMe });
+      } else {
+        // Update existing
+        const unreadUpdateClause = fromMe ? "" : "unread_count = unread_count + 1,";
+        const finalProfilePic = profilePic || chatRow.profile_pic;
+        
+        if (chatRow.id !== chatId) {
+          await pool.query("UPDATE chats SET id = $1 WHERE id = $2", [chatId, chatRow.id]);
+          await pool.query("UPDATE messages SET chat_id = $1 WHERE chat_id = $2", [chatId, chatRow.id]);
+          await pool.query("UPDATE chat_tags SET chat_id = $1 WHERE chat_id = $2", [chatId, chatRow.id]);
+          io.emit('chat_deleted', { id: chatRow.id });
+          
+          const updatedChatRes = await pool.query("SELECT * FROM chats WHERE id = $1", [chatId]);
+          if (updatedChatRes.rows[0]) {
+            io.emit('new_chat', updatedChatRes.rows[0]);
           }
-        });
+        }
+        
+        await pool.query(`UPDATE chats SET last_message = $1, last_message_time = $2, profile_pic = $3, name = $4, last_message_from_me = $5, ${unreadUpdateClause} id = id WHERE id = $6`,
+          [displayBody, timestamp, finalProfilePic, name, fromMe, chatId]);
+          
+        io.emit('chat_updated', { id: chatId, last_message: displayBody, last_message_time: timestamp, profile_pic: finalProfilePic, name, last_message_from_me: fromMe });
+      }
 
-        db.run("INSERT INTO messages (id, chat_id, body, from_me, timestamp, media_url, media_type, media_name, transcription) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [msg.id.id, chatId, body, fromMe, timestamp, mediaUrl, mediaType, mediaName, transcription], async () => {
-            io.emit('new_message', { id: msg.id.id, chat_id: chatId, body, from_me: fromMe, timestamp, media_url: mediaUrl, media_type: mediaType, media_name: mediaName, transcription });
-            
-            if (phone === '557591167094' && !fromMe && process.env.GEMINI_API_KEY) {
-              try {
-                const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-                
-                const aiMemory = await new Promise((resolve) => {
-                  aiDb.all("SELECT * FROM ai_memory ORDER BY created_at DESC", (err, rows) => resolve(rows || []));
-                });
-                
-                const systemInstruction = \`Você é o assistente pessoal do usuário. Você está conversando com ele pelo WhatsApp.
-Data e hora atual: \${new Date().toLocaleString('pt-BR')}
+      await pool.query("INSERT INTO messages (id, chat_id, body, from_me, timestamp, media_url, media_type, media_name, transcription) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        [msg.id.id, chatId, body, fromMe, timestamp, mediaUrl, mediaType, mediaName, transcription]);
+
+      io.emit('new_message', { id: msg.id.id, chat_id: chatId, body, from_me: fromMe, timestamp, media_url: mediaUrl, media_type: mediaType, media_name: mediaName, transcription });
+      
+      if (phone === '557591167094' && !fromMe && process.env.GEMINI_API_KEY) {
+        try {
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+          
+          const aiMemoryRes = await pool.query("SELECT * FROM ai_memory ORDER BY created_at DESC");
+          const aiMemory = aiMemoryRes.rows || [];
+          
+          const systemInstruction = `Você é o assistente pessoal do usuário. Você está conversando com ele pelo WhatsApp.
+Data e hora atual: ${new Date().toLocaleString('pt-BR')}
 
 Sua memória atual (tarefas, lembretes, base de conhecimento):
-\${JSON.stringify(aiMemory)}
+${JSON.stringify(aiMemory)}
 
 Se o usuário pedir para adicionar algo à sua memória, retorne APENAS o JSON:
 {"command": "ADD_MEMORY", "params": {"content": "O que deve ser lembrado", "trigger_at": "2026-05-10T09:00:00"}} (trigger_at é opcional, use formato ISO 8601 se o usuário pedir para ser lembrado em uma data/hora específica)
@@ -1202,86 +1294,78 @@ Se o usuário pedir para enviar uma mensagem para alguém, retorne APENAS o JSON
 Se o usuário pedir para agendar o envio de uma mensagem para alguém, retorne APENAS o JSON:
 {"command": "SCHEDULE_MESSAGE", "params": {"phone": "5511999999999", "message": "Texto da mensagem", "trigger_at": "2026-05-10T09:00:00"}} (trigger_at é obrigatório e deve estar no formato ISO 8601)
 
-Caso contrário, responda de forma natural, útil e prestativa.\`;
+Caso contrário, responda de forma natural, útil e prestativa.`;
 
-                const response = await ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
-                  contents: body || transcription || 'Mensagem de mídia',
-                  config: {
-                    systemInstruction: systemInstruction
+          const response = await ai.getGenerativeModel({ model: 'gemini-1.5-flash' }).generateContent({
+            contents: [{ role: 'user', parts: [{ text: body || transcription || 'Mensagem de mídia' }] }],
+            systemInstruction: systemInstruction
+          });
+
+          let replyText = response.response.text() || '';
+          
+          try {
+            const cleanJson = replyText.replace(/```json/g, '').replace(/```/g, '').trim();
+            if (cleanJson.startsWith('{') && cleanJson.endsWith('}')) {
+              const cmd = JSON.parse(cleanJson);
+              if (cmd.command === 'ADD_MEMORY') {
+                const triggerAtStr = cmd.params.trigger_at || cmd.params.data_alerta;
+                let triggerAt = null;
+                if (triggerAtStr) {
+                  const parsedDate = new Date(triggerAtStr);
+                  if (!isNaN(parsedDate.getTime())) {
+                    triggerAt = parsedDate.getTime();
                   }
-                });
-
-                let replyText = response.text || '';
+                }
                 
-                try {
-                  const cleanJson = replyText.replace(/\`\`\`json/g, '').replace(/\`\`\`/g, '').trim();
-                  if (cleanJson.startsWith('{') && cleanJson.endsWith('}')) {
-                    const cmd = JSON.parse(cleanJson);
-                    if (cmd.command === 'ADD_MEMORY') {
-                      const triggerAtStr = cmd.params.trigger_at || cmd.params.data_alerta;
-                      let triggerAt = null;
-                      if (triggerAtStr) {
-                        const parsedDate = new Date(triggerAtStr);
-                        if (!isNaN(parsedDate.getTime())) {
-                          triggerAt = parsedDate.getTime();
-                        }
-                      }
-                      
-                      await new Promise((resolve) => {
-                        aiDb.run("INSERT INTO ai_memory (content, created_at, trigger_at, is_triggered) VALUES (?, ?, ?, ?)", [cmd.params.content, Date.now(), triggerAt, 0], resolve);
-                      });
-                      
-                      if (triggerAt) {
-                        replyText = \`✅ Lembrete agendado para \${new Date(triggerAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}:\n"\${cmd.params.content}"\`;
-                      } else {
-                        replyText = \`✅ Lembrete/Tarefa adicionada à minha memória:\n"\${cmd.params.content}"\`;
-                      }
-                    } else if (cmd.command === 'SEND_MESSAGE') {
-                      const phone = cmd.params.phone;
-                      const msgText = cmd.params.message;
-                      if (phone && msgText && waClient && waStatus === 'connected') {
-                        const targetChatId = \`\${phone}@c.us\`;
-                        await waClient.sendMessage(targetChatId, msgText);
-                        replyText = \`✅ Mensagem enviada para \${phone}:\n"\${msgText}"\`;
-                      } else {
-                        replyText = \`❌ Erro ao enviar mensagem. Verifique se o telefone e a mensagem estão corretos.\`;
-                      }
-                    } else if (cmd.command === 'SCHEDULE_MESSAGE') {
-                      const phone = cmd.params.phone;
-                      const msgText = cmd.params.message;
-                      const triggerAtStr = cmd.params.trigger_at;
-                      let triggerAt = null;
-                      if (triggerAtStr) {
-                        const parsedDate = new Date(triggerAtStr);
-                        if (!isNaN(parsedDate.getTime())) {
-                          triggerAt = parsedDate.getTime();
-                        }
-                      }
-                      
-                      if (triggerAt && phone && msgText) {
-                        await new Promise((resolve) => {
-                          aiDb.run("INSERT INTO scheduled_messages (phone, message, trigger_at, is_triggered, created_at) VALUES (?, ?, ?, ?, ?)", [phone, msgText, triggerAt, 0, Date.now()], resolve);
-                        });
-                        replyText = \`✅ Mensagem agendada para \${new Date(triggerAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}:\nPara: \${phone}\n"\${msgText}"\`;
-                      } else {
-                        replyText = \`❌ Erro ao agendar mensagem. Verifique se o telefone, mensagem e data/hora estão corretos.\`;
-                      }
-                    }
+                await pool.query("INSERT INTO ai_memory (content, created_at, trigger_at, is_triggered) VALUES ($1, $2, $3, $4)", [cmd.params.content, Date.now(), triggerAt, 0]);
+                
+                if (triggerAt) {
+                  replyText = `✅ Lembrete agendado para ${new Date(triggerAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}:\n"${cmd.params.content}"`;
+                } else {
+                  replyText = `✅ Lembrete/Tarefa adicionada à minha memória:\n"${cmd.params.content}"`;
+                }
+              } else if (cmd.command === 'SEND_MESSAGE') {
+                const phone = cmd.params.phone;
+                const msgText = cmd.params.message;
+                if (phone && msgText && waClient && waStatus === 'connected') {
+                  const targetChatId = `${phone}@c.us`;
+                  await waClient.sendMessage(targetChatId, msgText);
+                  replyText = `✅ Mensagem enviada para ${phone}:\n"${msgText}"`;
+                } else {
+                  replyText = `❌ Erro ao enviar mensagem. Verifique se o telefone e a mensagem estão corretos.`;
+                }
+              } else if (cmd.command === 'SCHEDULE_MESSAGE') {
+                const phone = cmd.params.phone;
+                const msgText = cmd.params.message;
+                const triggerAtStr = cmd.params.trigger_at;
+                let triggerAt = null;
+                if (triggerAtStr) {
+                  const parsedDate = new Date(triggerAtStr);
+                  if (!isNaN(parsedDate.getTime())) {
+                    triggerAt = parsedDate.getTime();
                   }
-                } catch (e) {
-                  // Not a JSON, just send the text
                 }
-
-                if (replyText) {
-                  await waClient.sendMessage(chatId, replyText);
+                
+                if (triggerAt && phone && msgText) {
+                  await pool.query("INSERT INTO scheduled_messages (phone, message, trigger_at, is_triggered, created_at) VALUES ($1, $2, $3, $4, $5)", [phone, msgText, triggerAt, 0, Date.now()]);
+                  replyText = `✅ Mensagem agendada para ${new Date(triggerAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}:\nPara: ${phone}\n"${msgText}"`;
+                } else {
+                  replyText = `❌ Erro ao agendar mensagem. Verifique se o telefone, mensagem e data/hora estão corretos.`;
                 }
-              } catch (err) {
-                console.error('Error processing AI message for 557591167094:', err);
               }
             }
-          });
-      });
+          } catch (e) {
+            // Not a JSON, just send the text
+          }
+
+          if (replyText) {
+            await waClient.sendMessage(chatId, replyText);
+          }
+        } catch (err) {
+          console.error('Error processing AI message for 557591167094:', err);
+        }
+      }
+    });
     });
 
     waClient.initialize().catch(err => {
