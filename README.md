@@ -1,11 +1,18 @@
-<div align="center">
+# Contábil Manager Pro (React Version)
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+This is a modern React/TypeScript implementation of the Accounting Management System.
 
-  <h1>Built with AI Studio</h2>
+## Features
+- **Dashboard:** Real-time overview of tasks and companies.
+- **Kanban Board:** Drag-and-drop task management.
+- **Companies:** Manage Normal and MEI companies.
+- **Documents:** Track document status per competence.
+- **WhatsApp:** Mock connection interface.
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## Deployment to Easypanel
+1. **Docker:** This project includes a `Dockerfile` optimized for Nginx serving a React Static Build.
+2. **Database:** Since this is a Client-Side App, it currently uses Mock Data (`constants.ts`). To persist data in `/app/data` as requested, you would need to connect this frontend to your Python API.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
-
-</div>
+## Running Locally
+1. `npm install`
+2. `npm start`
