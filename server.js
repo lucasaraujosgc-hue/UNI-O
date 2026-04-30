@@ -4,7 +4,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import pool from './db.js';
-import pkg, { type Client as WAClient } from 'whatsapp-web.js';
+import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth, MessageMedia } = pkg;
 import qrcode from 'qrcode';
 import path from 'path';
@@ -888,6 +888,55 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
     }
   });
 
+  // --- Personal Notes API ---
+  app.get('/api/notes', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM personal_notes ORDER BY created_at DESC");
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/notes', async (req, res) => {
+    const { id, title, content } = req.body;
+    try {
+      if (id) {
+        await pool.query(
+          "UPDATE personal_notes SET title = $1, content = $2, updated_at = $3 WHERE id = $4",
+          [title, content, Date.now(), id]
+        );
+        res.json({ success: true, id });
+      } else {
+        const result = await pool.query(
+          "INSERT INTO personal_notes (title, content, created_at, updated_at) VALUES ($1, $2, $3, $4) RETURNING id",
+          [title, content, Date.now(), Date.now()]
+        );
+        res.json({ success: true, id: result.rows[0].id });
+      }
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/notes/:id', async (req, res) => {
+    try {
+      await pool.query("DELETE FROM personal_notes WHERE id = $1", [req.params.id]);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/history', async (req, res) => {
+    try {
+      const result = await pool.query("SELECT * FROM chat_history ORDER BY timestamp DESC LIMIT 100");
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // --- WhatsApp Client Setup ---
   let waClient = null;
   let waStatus = 'disconnected';
@@ -943,7 +992,7 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
       }, contactId);
       return url || null;
     } catch (err) {
-      console.error(\`Error getting profile pic for \${contactId}:\`, err);
+      console.error(`Error getting profile pic for ${contactId}:`, err);
       return null;
     }
   };
@@ -959,15 +1008,15 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
       });
 
       const safeId = chatId.replace(/[@.]/g, '_');
-      const filename = \`profile_\${safeId}.jpg\`;
+      const filename = `profile_${safeId}.jpg`;
       const filepath = path.join(MEDIA_DIR, filename);
 
       fs.writeFileSync(filepath, Buffer.from(response.data));
 
       // Append timestamp to break browser cache
-      return \`/media/\${filename}?t=\${Date.now()}\`;
+      return `/media/${filename}?t=${Date.now()}`;
     } catch (err) {
-      console.error(\`Erro ao baixar foto de perfil (\${chatId}):\`, err);
+      console.error(`Erro ao baixar foto de perfil (${chatId}):`, err);
       return null;
     }
   };
@@ -1015,7 +1064,7 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
 
       return profilePic || null;
     } catch (error) {
-      console.error(\`Error syncing chat info for \${chatId}:\`, error);
+      console.error(`Error syncing chat info for ${chatId}:`, error);
       return null;
     }
   };
@@ -1079,11 +1128,11 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
         try {
           if (fs.lstatSync(file)) {
             fs.unlinkSync(file);
-            console.log(\`Removed lock file: \${file}\`);
+            console.log(`Removed lock file: ${file}`);
           }
         } catch (err) {
           if (err.code !== 'ENOENT') {
-            console.error(\`Error checking/removing \${file}:\`, err);
+            console.error(`Error checking/removing ${file}:`, err);
           }
         }
       }
@@ -1423,7 +1472,7 @@ Caso contrário, responda de forma natural, útil e prestativa.`;
   }
 
   server.listen(PORT, "0.0.0.0", () => {
-    console.log(\`Server running on http://localhost:\${PORT}\`);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
