@@ -14,7 +14,8 @@ import {
   X,
   Mails,
   UserCog,
-  LogOut
+  LogOut,
+  Bot
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -27,7 +28,7 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage, isOpen, setIsOpen, onLogout }) => {
   const menuItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'dashboard', label: 'União CRM & IA', icon: Bot },
     { id: 'companies', label: 'Empresas', icon: Building2 },
     { id: 'documents', label: 'Documentos', icon: FileText },
     { id: 'upload', label: 'Upload', icon: Upload },
@@ -35,7 +36,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage, isOpen, se
     { id: 'bulksend', label: 'Envio em Massa', icon: Mails },
     { id: 'scheduled', label: 'Agendamentos', icon: CalendarClock },
     { id: 'whatsapp', label: 'Conexão WPP', icon: MessageCircle },
-    { id: 'whatsapp_kanban', label: 'CRM WhatsApp', icon: MessageCircle },
     { id: 'settings', label: 'Usuário', icon: UserCog },
   ];
 

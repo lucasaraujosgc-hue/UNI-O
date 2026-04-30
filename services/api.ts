@@ -192,5 +192,14 @@ export const api = {
   deleteScheduledMessage: async (id: number): Promise<void> => {
       const res = await fetch(`${API_URL}/scheduled/${id}`, { method: 'DELETE', headers: getAuthHeader() });
       return handleResponse(res);
+  },
+
+  askCopilot: async (message: string): Promise<{ reply: string }> => {
+    const res = await fetch(`${API_URL}/copilot`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ message })
+    });
+    return handleResponse(res);
   }
 };

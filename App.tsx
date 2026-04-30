@@ -2,7 +2,6 @@
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
-import Kanban from './components/Kanban';
 import Companies from './components/Companies';
 import WhatsAppConnect from './components/WhatsAppConnect';
 import WhatsAppKanban from './components/WhatsAppKanban';
@@ -155,8 +154,6 @@ const App: React.FC = () => {
         return <Companies />;
       case 'whatsapp':
         return <WhatsAppConnect />;
-      case 'whatsapp_kanban':
-        return <WhatsAppKanban />;
       case 'documents':
         return <Documents 
                   userSettings={userSettings} 
@@ -206,28 +203,31 @@ const App: React.FC = () => {
         onLogout={handleLogout}
       />
       
-      <main className="flex-1 overflow-auto w-full relative">
-        <header className="bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center sticky top-0 z-30">
-          <h2 className="text-lg font-semibold text-gray-700 capitalize">
-            {activePage === 'bulksend' ? 'Envio em Massa' : activePage === 'settings' ? 'Usuário' : activePage === 'send' ? 'Envio' : activePage}
-          </h2>
-          <div className="flex items-center gap-4">
-             <div className="text-sm text-right hidden sm:block">
-                <p className="font-bold text-gray-700">Lucas Araújo</p>
-                <p className="text-gray-500 text-xs">Contador | CRC-BA 046968/O</p>
-             </div>
-             <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold border-2 border-white shadow-sm">
-                LA
-             </div>
-          </div>
-        </header>
+      <main className="flex-1 overflow-auto w-full relative flex flex-col min-h-0">
+        {activePage !== 'dashboard' && (
+          <header className="bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center sticky top-0 z-30 flex-shrink-0">
+            <h2 className="text-lg font-semibold text-gray-700 capitalize">
+              {activePage === 'bulksend' ? 'Envio em Massa' : activePage === 'settings' ? 'Usuário' : activePage === 'send' ? 'Envio' : activePage}
+            </h2>
+            <div className="flex items-center gap-4">
+              <div className="text-sm text-right hidden sm:block">
+                  <p className="font-bold text-gray-700">Lucas Araújo</p>
+                  <p className="text-gray-500 text-xs">Contador | CRC-BA 046968/O</p>
+              </div>
+              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold border-2 border-white shadow-sm">
+                  LA
+              </div>
+            </div>
+          </header>
+        )}
 
-        <div className={activePage === 'whatsapp_kanban' ? 'h-[calc(100vh-73px)] w-full' : 'p-6 max-w-7xl mx-auto pb-20'}>
+        <div className={activePage === 'dashboard' ? 'flex-1 min-h-0 w-full overflow-hidden' : 'p-0 max-w-7xl mx-auto pb-20 flex-1 overflow-auto'}>
           {renderContent()}
         </div>
       </main>
     </div>
   );
 };
+
 
 export default App;

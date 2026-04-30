@@ -11,9 +11,8 @@ import {
 } from 'lucide-react';
 import { Task, TaskStatus, UserSettings } from '../types';
 import { DEFAULT_USER_SETTINGS } from '../constants';
-import Kanban from './Kanban';
-import DashboardCalendar from './DashboardCalendar';
-import TaskModal from './TaskModal';
+import WhatsAppKanban from './WhatsAppKanban';
+import CopilotPanel from './CopilotPanel';
 import { api } from '../services/api';
 
 // Stats mais compactos para o topo
@@ -36,10 +35,6 @@ const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [isTogglingAi, setIsTogglingAi] = useState(false);
-  
-  // Modal states for Calendar interactions
-  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   const loadData = async () => {
     try {
@@ -64,31 +59,6 @@ const Dashboard: React.FC = () => {
     loadData();
   }, []);
 
-  const handleTaskClick = (task: Task) => {
-      setEditingTask(task);
-      setIsTaskModalOpen(true);
-  };
-
-  const handleSaveTask = async (task: Task) => {
-      try {
-          await api.saveTask(task);
-          setIsTaskModalOpen(false);
-          loadData(); // Reload everything
-      } catch (e) {
-          alert("Erro ao salvar tarefa");
-      }
-  };
-
-  const handleDeleteTask = async (taskId: number) => {
-      try {
-          await api.deleteTask(taskId);
-          setIsTaskModalOpen(false);
-          loadData();
-      } catch (e) {
-          alert("Erro ao excluir tarefa");
-      }
-  };
-
   const toggleAi = async () => {
     if (!settings) return;
     setIsTogglingAi(true);
@@ -112,11 +82,16 @@ const Dashboard: React.FC = () => {
   const isAiEnabled = settings?.aiEnabled !== false;
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center bg-white p-4 rounded-lg shadow-sm border border-gray-100">
-        <div>
-          <h2 className="text-xl font-bold text-gray-800">Dashboard</h2>
-          <p className="text-sm text-gray-500">Visão geral do seu escritório</p>
+    <div className="space-y-4 h-full flex flex-col p-4">
+      <div className="flex justify-between items-center bg-white p-4 rounded-lg shadow-sm border border-gray-100 flex-shrink-0">
+        <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center text-emerald-600">
+                <Bot className="w-6 h-6" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-gray-800">IA Copiloto & CRM</h2>
+              <p className="text-sm text-gray-500">Gestão de Canais e Automações</p>
+            </div>
         </div>
         <div className="flex items-center gap-3">
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium border ${isAiEnabled ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>
@@ -138,52 +113,14 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* 1. Visão Geral Compacta */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <CompactStatCard 
-          title="Empresas" 
-          value={companiesCount} 
-          icon={Building2} 
-          color="bg-blue-500" 
-        />
-        <CompactStatCard 
-          title="Pendências" 
-          value={pendingTasks} 
-          icon={Clock} 
-          color="bg-yellow-500" 
-        />
-        <CompactStatCard 
-          title="Urgentes" 
-          value={urgentTasks.length} 
-          icon={AlertCircle} 
-          color="bg-red-500" 
-        />
-        <CompactStatCard 
-          title="Envios (Hoje)" 
-          value={recentSends.length} // Simplificação para demo
-          icon={CheckCircle2} 
-          color="bg-green-500" 
-        />
+      <div className="flex-1 flex gap-4 min-h-0 overflow-hidden">
+        <div className="flex-1 border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm flex flex-col min-h-0">
+          <WhatsAppKanban />
+        </div>
+        <div className="w-80 hidden xl:block min-h-0">
+          <CopilotPanel />
+        </div>
       </div>
-
-      {/* 2. Calendário Mensal em Destaque */}
-      <div>
-          <DashboardCalendar tasks={tasks} onTaskClick={handleTaskClick} />
-      </div>
-
-      {/* 3. Gerenciador de Tarefas (Kanban) */}
-      <div className="pt-4 border-t border-gray-200">
-          <Kanban />
-      </div>
-
-      {/* Modal para edição via Calendário */}
-      <TaskModal 
-        isOpen={isTaskModalOpen} 
-        onClose={() => setIsTaskModalOpen(false)} 
-        task={editingTask} 
-        onSave={handleSaveTask}
-        onDelete={handleDeleteTask}
-      />
     </div>
   );
 };

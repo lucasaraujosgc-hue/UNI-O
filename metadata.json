@@ -1,5 +1,5 @@
 {
   "name": "União",
-  "description": "A modern, responsive React dashboard for accounting management, featuring company registry, Kanban task management, document tracking, and WhatsApp integration.",
+  "description": "União: A next-gen accounting CRM featuring an AI Copiloto for automated customer management, WhatsApp Kanban integration, real-time lead tracking, and smart document management.",
   "requestFramePermissions": []
 }

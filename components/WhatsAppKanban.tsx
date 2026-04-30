@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
-import { Plus, MessageCircle, Edit2, X, Trash2, Play, Pause, CheckCheck } from 'lucide-react';
+import { Plus, MessageCircle, Edit2, X, Trash2, Play, Pause, CheckCheck, AlertCircle, Clock } from 'lucide-react';
 import { Column, Chat, Tag, Message } from '../types';
 import { format, isSameDay, isToday, isYesterday } from 'date-fns';
 
@@ -274,77 +274,54 @@ export default function WhatsAppKanban() {
   });
 
   return (
-    <div className="flex h-full w-full bg-slate-50 font-sans overflow-hidden">
-      {isSidebarOpen && (
-        <div className="w-64 bg-white border-r border-slate-200 shadow-sm flex flex-col flex-shrink-0 z-10 h-full">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <MessageCircle className="text-emerald-500" />
-              <h1 className="font-bold text-lg text-slate-800 tracking-tight">Filtros & Tags</h1>
+    <div className="flex h-full w-full bg-slate-50 font-sans overflow-hidden flex-col">
+      {/* Top Bar for Filters and Tags */}
+      <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between shadow-sm z-10 flex-shrink-0">
+        <div className="flex flex-col md:flex-row md:items-center gap-4 w-full">
+            <div className="flex items-center gap-2 flex-1 max-w-md relative">
+              <input 
+                type="text" 
+                placeholder="Buscar chats..." 
+                value={searchQuery} 
+                onChange={(e) => setSearchQuery(e.target.value)} 
+                className="w-full border border-slate-300 rounded-full pl-10 pr-4 py-1.5 text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-shadow bg-slate-50" 
+              />
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
             </div>
-          </div>
-          <div className="p-4 border-b border-slate-100">
-            <input type="text" placeholder="Buscar chats..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-shadow bg-slate-50" />
-          </div>
-          <div className="p-4 flex-1 overflow-y-auto no-scrollbar">
-            <h2 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 mt-4">Filtro de Tags</h2>
-            <div className="flex flex-wrap gap-1 mb-6">
+
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
               {tags.map(tag => {
                 const isSelected = selectedTagFilters.includes(tag.id);
                 return (
-                  <button key={tag.id} onClick={() => setSelectedTagFilters(prev => isSelected ? prev.filter(id => id !== tag.id) : [...prev, tag.id])} className={`text-xs px-2 py-1 rounded-full border flex items-center gap-1 transition-colors ${isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
+                  <button 
+                    key={tag.id} 
+                    onClick={() => setSelectedTagFilters(prev => isSelected ? prev.filter(id => id !== tag.id) : [...prev, tag.id])} 
+                    className={`flex-shrink-0 text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1.5 transition-colors font-medium
+                    ${isSelected ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+                  >
                     <div className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color }}></div>{tag.name}
                   </button>
                 );
               })}
-            </div>
-            <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Gerenciar Tags</h2>
-            <div className="space-y-2">
-              {tags.map(tag => (
-                <div key={tag.id} className="flex items-center justify-between text-sm group">
-                  {editingTagId === tag.id ? (
-                    <div className="flex-1 flex flex-col gap-2 p-2 bg-gray-50 border border-gray-200 rounded-md">
-                      <input type="text" value={editTagName} onChange={(e) => setEditTagName(e.target.value)} className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500" autoFocus />
-                      <div className="flex items-center gap-2">
-                        <input type="color" value={editTagColor} onChange={(e) => setEditTagColor(e.target.value)} className="w-6 h-6 p-0 border-0 rounded cursor-pointer" />
-                        <span className="text-xs text-gray-500">Cor</span>
-                      </div>
-                      <div className="flex gap-1">
-                        <button onClick={() => handleEditTag(tag.id)} className="flex-1 bg-blue-600 text-white text-[10px] px-2 py-1 rounded hover:bg-blue-700">Salvar</button>
-                        <button onClick={() => setEditingTagId(null)} className="flex-1 bg-gray-200 text-gray-700 text-[10px] px-2 py-1 rounded hover:bg-gray-300">Cancelar</button>
-                      </div>
+              
+              <div className="relative group/newtag flex items-center ml-2">
+                 {isAddingTag ? (
+                    <div className="flex items-center gap-1 bg-white border border-emerald-200 p-1 rounded-md shadow-sm absolute right-0 top-0 z-20 w-48">
+                      <input type="text" value={newTagName} onChange={(e) => setNewTagName(e.target.value)} placeholder="Nome" className="w-full text-[11px] border-none focus:ring-0 p-0" autoFocus />
+                      <input type="color" value={newTagColor} onChange={(e) => setNewTagColor(e.target.value)} className="w-4 h-4 p-0 border-0 rounded cursor-pointer flex-shrink-0" />
+                      <button onClick={handleAddTag} className="text-emerald-600 p-0.5 hover:bg-emerald-50 rounded"><CheckCheck size={14}/></button>
+                      <button onClick={() => setIsAddingTag(false)} className="text-slate-400 p-0.5 hover:bg-slate-50 rounded"><X size={14}/></button>
                     </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ backgroundColor: tag.color }}></div><span>{tag.name}</span></div>
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => { setEditingTagId(tag.id); setEditTagName(tag.name); setEditTagColor(tag.color); }} className="text-gray-400 hover:text-blue-500 p-1"><Edit2 size={14} /></button>
-                        <button onClick={() => handleDeleteTag(tag.id)} className="text-gray-400 hover:text-red-500 p-1"><Trash2 size={14} /></button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              ))}
-              {isAddingTag ? (
-                <div className="mt-2 p-2 bg-gray-50 border border-gray-200 rounded-md">
-                  <input type="text" value={newTagName} onChange={(e) => setNewTagName(e.target.value)} placeholder="Nome da tag" className="w-full border border-gray-300 rounded px-2 py-1 text-xs mb-2 focus:outline-none focus:border-blue-500" autoFocus />
-                  <div className="flex flex-col gap-2 mt-2">
-                    <input type="color" value={newTagColor} onChange={(e) => setNewTagColor(e.target.value)} className="w-6 h-6 p-0 border-0 rounded" />
-                    <div className="flex gap-1">
-                      <button onClick={handleAddTag} className="bg-blue-600 text-white text-xs px-2 py-1 rounded">Add</button>
-                      <button onClick={() => setIsAddingTag(false)} className="bg-gray-200 text-gray-700 text-xs px-2 py-1 rounded">Cancel</button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <button onClick={() => setIsAddingTag(true)} className="text-blue-600 text-xs flex mt-2 hover:underline"><Plus size={14}/> Nova Tag</button>
-              )}
+                 ) : (
+                    <button onClick={() => setIsAddingTag(true)} className="text-slate-400 hover:text-emerald-500 flex items-center gap-1 text-[11px] font-medium border border-dashed border-slate-300 rounded-full px-2 py-1"><Plus size={12}/> Tag</button>
+                 )}
+              </div>
             </div>
-          </div>
         </div>
-      )}
+      </div>
 
-      {/* Kanban Board */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Changed from old left sidebar to just board container */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         <div className="flex-1 overflow-x-auto overflow-y-hidden px-6 pt-6 pb-2 mb-4 flex gap-6 items-start h-full">
         {columns.map(column => (
@@ -381,10 +358,25 @@ export default function WhatsAppKanban() {
                       {editingChatNameId === chat.id ? (
                         <input type="text" value={editChatName} onChange={(e) => setEditChatName(e.target.value)} onBlur={() => handleEditChatName(chat.id)} onKeyDown={(e) => e.key === 'Enter' && handleEditChatName(chat.id)} onClick={(e) => e.stopPropagation()} className="font-medium text-slate-800 border-b border-emerald-500 focus:outline-none w-full bg-slate-50 px-1 rounded-t" autoFocus />
                       ) : (
-                        <h4 className="font-semibold text-slate-800 tracking-tight truncate pr-2 flex items-center gap-1 group/name">
-                          {chat.name || chat.phone}
-                          <button onClick={(e) => { e.stopPropagation(); setEditingChatNameId(chat.id); setEditChatName(chat.name || chat.phone || ''); }} className="opacity-0 group-hover/name:opacity-100 text-slate-400 hover:text-emerald-500"><Edit2 size={12} /></button>
-                        </h4>
+                        <div className="flex flex-col">
+                          <h4 className="font-semibold text-slate-800 tracking-tight truncate pr-2 flex items-center gap-1 group/name">
+                            {chat.name || chat.phone}
+                            <button onClick={(e) => { e.stopPropagation(); setEditingChatNameId(chat.id); setEditChatName(chat.name || chat.phone || ''); }} className="opacity-0 group-hover/name:opacity-100 text-slate-400 hover:text-emerald-500"><Edit2 size={12} /></button>
+                          </h4>
+                          {chat.unread_count > 1 ? (
+                             <div className="flex items-center gap-1 text-[9px] font-bold text-rose-500 uppercase">
+                               <AlertCircle size={10} /> Alta Prioridade
+                             </div>
+                           ) : chat.unread_count === 1 ? (
+                              <div className="flex items-center gap-1 text-[9px] font-bold text-amber-500 uppercase">
+                                <Clock size={10} /> Responder
+                              </div>
+                           ) : (
+                             <div className="flex items-center gap-1 text-[9px] font-bold text-slate-400 uppercase">
+                               <CheckCheck size={10} className="text-sky-500" /> Atendido
+                             </div>
+                           )}
+                        </div>
                       )}
                     </div>
                     {chat.unread_count > 0 && <span className="bg-emerald-500 text-white shadow-sm text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0">{chat.unread_count}</span>}
@@ -535,5 +527,6 @@ export default function WhatsAppKanban() {
         </div>
       )}
     </div>
+  </div>
   );
 }
