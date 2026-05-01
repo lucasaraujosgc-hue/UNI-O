@@ -8,6 +8,6 @@ export default defineConfig({
     outDir: 'dist',
   },
   server: {
-    allowedHosts: 'all'
+    allowedHosts: true
   }
 });
