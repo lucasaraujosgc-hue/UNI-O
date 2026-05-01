@@ -8,6 +8,6 @@ export default defineConfig({
     outDir: 'dist',
   },
   server: {
-    allowedHosts: ['pm-uniao.wvai75.easypanel.host']
+    allowedHosts: 'all'
   }
 });
