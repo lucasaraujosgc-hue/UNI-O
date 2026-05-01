@@ -1144,6 +1144,7 @@ REGRA FINAL: Você é um assistente operacional de CRM/WhatsApp para contabilida
       authStrategy: new LocalAuth({ dataPath: authPath }),
       puppeteer: {
         headless: true,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
