@@ -44,8 +44,8 @@ COPY package*.json ./
 # Copia as dependências já instaladas/compiladas do estágio anterior
 COPY --from=builder /app/node_modules ./node_modules
 
-# Copia servidor e frontend buildado
-COPY server.js ./
+# Copia servidor, banco de dados e frontend buildado
+COPY server.js db.js ./
 COPY --from=builder /app/dist ./dist
 
 # Cria diretórios necessários e ajusta permissões
