@@ -36,7 +36,7 @@ WORKDIR /app
 # Variáveis para usar o Chromium do sistema
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
-    DATA_PATH=/app/data
+    DATA_PATH=/app/data \
     NODE_ENV=production
 
 # Copia package.json
