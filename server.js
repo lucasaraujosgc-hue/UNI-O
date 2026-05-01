@@ -1415,7 +1415,6 @@ Caso contrário, responda de forma natural, útil e prestativa.`;
         }
       }
     });
-    });
 
     waClient.initialize().catch(err => {
       console.error('Failed to initialize WhatsApp:', err);

@@ -32,7 +32,6 @@
     "react-rnd": "^10.5.3",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
-    "sqlite3": "^5.1.7",
     "uuid": "^13.0.0",
     "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main",
     "xlsx": "^0.18.5"
